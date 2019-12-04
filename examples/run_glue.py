@@ -49,7 +49,7 @@ from transformers import (WEIGHTS_NAME, BertConfig,
                                   DistilBertForSequenceClassification,
                                   DistilBertTokenizer,
                                   AlbertConfig,
-                                  AlbertForSequenceClassification, 
+                                  AlbertForSequenceClassification,
                                   AlbertTokenizer,
                                 )
 
@@ -62,7 +62,7 @@ from transformers import glue_convert_examples_to_features as convert_examples_t
 
 logger = logging.getLogger(__name__)
 
-ALL_MODELS = sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (BertConfig, XLNetConfig, XLMConfig, 
+ALL_MODELS = sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (BertConfig, XLNetConfig, XLMConfig,
                                                                                 RobertaConfig, DistilBertConfig)), ())
 
 MODEL_CLASSES = {
@@ -297,7 +297,7 @@ def load_and_cache_examples(args, task, tokenizer, evaluate=False):
         label_list = processor.get_labels()
         if task in ['mnli', 'mnli-mm'] and args.model_type in ['roberta']:
             # HACK(label indices are swapped in RoBERTa pretrained model)
-            label_list[1], label_list[2] = label_list[2], label_list[1] 
+            label_list[1], label_list[2] = label_list[2], label_list[1]
         examples = processor.get_dev_examples(args.data_dir) if evaluate else processor.get_train_examples(args.data_dir)
         features = convert_examples_to_features(examples,
                                                 tokenizer,
@@ -323,7 +323,7 @@ def load_and_cache_examples(args, task, tokenizer, evaluate=False):
         all_labels = torch.tensor([f.label for f in features], dtype=torch.long)
     elif output_mode == "regression":
         all_labels = torch.tensor([f.label for f in features], dtype=torch.float)
- 
+
     dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_labels)
     return dataset
 
@@ -367,7 +367,7 @@ def main():
     parser.add_argument("--per_gpu_eval_batch_size", default=8, type=int,
                         help="Batch size per GPU/CPU for evaluation.")
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
-                        help="Number of updates steps to accumulate before performing a backward/update pass.")     
+                        help="Number of updates steps to accumulate before performing a backward/update pass.")
     parser.add_argument("--learning_rate", default=5e-5, type=float,
                         help="The initial learning rate for Adam.")
     parser.add_argument("--weight_decay", default=0.0, type=float,
@@ -407,6 +407,19 @@ def main():
                         help="For distributed training: local_rank")
     parser.add_argument('--server_ip', type=str, default='', help="For distant debugging.")
     parser.add_argument('--server_port', type=str, default='', help="For distant debugging.")
+
+    #################################################
+    ############## ADD FOR THE PROJECT ##############
+    #################################################
+    parser.add_argument("--do_predict", action="store_true",
+                        help="Whether to run predictions on the test set.")
+    parser.add_argument("--do_kaggle_submission", action='store_true',
+                        help="Whether to create kaggle submission on test set.")
+
+    #################################################
+    #################################################
+    #################################################
+
     args = parser.parse_args()
 
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train and not args.overwrite_output_dir:
@@ -517,12 +530,38 @@ def main():
         for checkpoint in checkpoints:
             global_step = checkpoint.split('-')[-1] if len(checkpoints) > 1 else ""
             prefix = checkpoint.split('/')[-1] if checkpoint.find('checkpoint') != -1 else ""
-            
+
             model = model_class.from_pretrained(checkpoint)
             model.to(args.device)
             result = evaluate(args, model, tokenizer, prefix=prefix)
             result = dict((k + '_{}'.format(global_step), v) for k, v in result.items())
             results.update(result)
+
+    if args.do_predict and args.local_rank in [-1, 0]:
+        tokenizer = tokenizer_class.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
+        model = model_class.from_pretrained(args.output_dir)
+        model.to(args.device)
+        result, predictions = evaluate(args, model, tokenizer, labels, pad_token_label_id, mode="test")
+        # Save results
+        output_test_results_file = os.path.join(args.output_dir, "test_results.txt")
+        with open(output_test_results_file, "w") as writer:
+            for key in sorted(result.keys()):
+                writer.write("{} = {}\n".format(key, str(result[key])))
+        # Save predictions
+        output_test_predictions_file = os.path.join(args.output_dir, "test_predictions.txt")
+        with open(output_test_predictions_file, "w") as writer:
+            with open(os.path.join(args.data_dir, "test.txt"), "r") as f:
+                example_id = 0
+                for line in f:
+                    if line.startswith("-DOCSTART-") or line == "" or line == "\n":
+                        writer.write(line)
+                        if not predictions[example_id]:
+                            example_id += 1
+                    elif predictions[example_id]:
+                        output_line = line.split()[0] + " " + predictions[example_id].pop(0) + "\n"
+                        writer.write(output_line)
+                    else:
+                        logger.warning("Maximum sequence length exceeded: No prediction for '%s'.", line.split()[0])
 
     return results
 
