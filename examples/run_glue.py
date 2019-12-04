@@ -457,7 +457,7 @@ def main():
     # Prepare GLUE task
     args.task_name = args.task_name.lower()
     if args.task_name not in processors:
-        logger.debug("The name of the task to train selected in the list: " + ", ".join(processors.keys())")
+        print("The name of the task to train selected in the list: " + ", ".join(processors.keys())")
         raise ValueError("Task not found: %s" % (args.task_name))
     processor = processors[args.task_name]()
     args.output_mode = output_modes[args.task_name]
